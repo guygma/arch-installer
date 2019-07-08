@@ -1,11 +1,8 @@
 #!/bin/bash
-# WARNING: this script will destroy data on the selected disk.
-# This script can be run by executing the following:
-#   curl -sL https://git.io/vAoV8 | bash
+
 set -uo pipefail
 trap 's=$?; echo "$0: Error on line "$LINENO": $BASH_COMMAND"; exit $s' ERR
 
-REPO_URL="https://s3.eu-west-2.amazonaws.com/mdaffin-arch/repo/x86_64"
 MIRRORLIST_URL="https://www.archlinux.org/mirrorlist/?country=GB&protocol=https&use_mirror_status=on"
 
 pacman -Sy --noconfirm pacman-contrib
@@ -16,11 +13,11 @@ curl -s "$MIRRORLIST_URL" | \
     rankmirrors -n 5 - > /etc/pacman.d/mirrorlist
 
 ### Get infomation from user ###
-hostname=$(dialog --stdout --inputbox "Enter hostname" 0 0) || exit 1
+hostname=$(dialog --stdout --inputbox "Enter hostname for new install" 0 0) || exit 1
 clear
 : ${hostname:?"hostname cannot be empty"}
 
-user=$(dialog --stdout --inputbox "Enter admin username" 0 0) || exit 1
+user=$(dialog --stdout --inputbox "Enter admin username (other than root)" 0 0) || exit 1
 clear
 : ${user:?"user cannot be empty"}
 
@@ -31,8 +28,15 @@ password2=$(dialog --stdout --passwordbox "Enter admin password again" 0 0) || e
 clear
 [[ "$password" == "$password2" ]] || ( echo "Passwords did not match"; exit 1; )
 
+rpassword=$(dialog --stdout --passwordbox "Enter root password" 0 0) || exit 1
+clear
+: ${password:?"password cannot be empty"}
+rpassword2=$(dialog --stdout --passwordbox "Enter root password again" 0 0) || exit 1
+clear
+[[ "$password" == "$password2" ]] || ( echo "Passwords did not match"; exit 1; )
+
 devicelist=$(lsblk -dplnx size -o name,size | grep -Ev "boot|rpmb|loop" | tac)
-device=$(dialog --stdout --menu "Select installtion disk" 0 0 0 ${devicelist}) || exit 1
+device=$(dialog --stdout --menu "Select installtion disk (multi-disk install not supported)" 0 0 0 ${devicelist}) || exit 1
 clear
 
 ### Set up logging ###
@@ -41,69 +45,192 @@ exec 2> >(tee "stderr.log")
 
 timedatectl set-ntp true
 
-### Setup the disk and partitions ###
-swap_size=$(free --mebi | awk '/Mem:/ {print $2}')
-swap_end=$(( $swap_size + 129 + 1 ))MiB
+# -- Setup the disk and partitions -- #
+# Create the ESP
+sgdisk -Z ${device}
+sgdisk -n 1:0:+1G -t 1:ef00
 
-parted --script "${device}" -- mklabel gpt \
-  mkpart ESP fat32 1Mib 129MiB \
-  set 1 boot on \
-  mkpart primary linux-swap 129MiB ${swap_end} \
-  mkpart primary ext4 ${swap_end} 100%
+# v !!! THIS IS W/O ENCRYPTION SO FAR v !!! #
 
-# Simple globbing was not enough as on one device I needed to match /dev/mmcblk0p1 
-# but not /dev/mmcblk0boot1 while being able to match /dev/sda1 on other devices.
+# ZFS: one filesystem to rule them all
+sgdisk -n 2:0:0 -t 2:bf00
+
+# ^ !!! THIS IS W/O ENCRYPTION SO FAR ^ !!! #
+
+# Prepare filesystems
 part_boot="$(ls ${device}* | grep -E "^${device}p?1$")"
-part_swap="$(ls ${device}* | grep -E "^${device}p?2$")"
-part_root="$(ls ${device}* | grep -E "^${device}p?3$")"
-
+part_root="$(ls ${device}* | grep -E "^${device}p?2$")"
 wipefs "${part_boot}"
-wipefs "${part_swap}"
 wipefs "${part_root}"
-
 mkfs.vfat -F32 "${part_boot}"
-mkswap "${part_swap}"
-mkfs.f2fs -f "${part_root}"
 
-swapon "${part_swap}"
-mount "${part_root}" /mnt
-mkdir /mnt/boot
+# v !! Still needs work !! v #
+zpool create -o mountpoint=none -o feature@encryption=enabled rpool
+zfs create rpool/sys
+zfs create rpool/sys/arch
+zfs create rpool/sys/arch/ROOT
+zfs create -o mountpoint=/ rpool/sys/arch/ROOT/default
+zpool set bootfs=rpool/sys/arch/ROOT/default
+zfs create rpool/common
+zfs create -o mountpoint=/home rpool/common/home
+zfs create -o mountpoint=/home/${user} rpool/common/home/${user}
+zfs create -o mountpoint=/root rpool/common/home/root
+zfs create -o mountpoint=/var/lib/abe rpool/common/home/abe
+zfs create -o mountpoint=/var/lib/lxc rpool/common/lxc
+zfs create -o mountpoint=/var/lib/machines rpool/common/machines
+zfs create -o mountpoint=/var/lib/vmail rpool/common/vmail
+zfs create -o mountpoint=/var/lib/filter rpool/common/filter
+zfs create -o mountpoint=/var/lib/dav rpool/common/dav
+zfs create -o mountpoint=/var/lib/lightdm rpool/common/lightdm
+zfs create -o mountpoint=/var/lib/postfix rpool/common/postfix
+zfs create -o mountpoint=/var/lib/caddy rpool/common/caddy
+# ^ !! Still needs work !! ^ #
+
+zfs unmount -a
+zpool export -a
+zpool import -R /mnt rpool
+mkdir -p /mnt/boot
 mount "${part_boot}" /mnt/boot
 
-### Install and configure the basic system ###
-cat >>/etc/pacman.conf <<EOF
-[mdaffin]
-SigLevel = Optional TrustAll
-Server = $REPO_URL
-EOF
+# -- Install and configure the basic system -- #
 
-pacstrap /mnt mdaffin-desktop
-genfstab -t PARTUUID /mnt >> /mnt/etc/fstab
+# Bare essentials - make the chroot boot
+cat pkglist | pacstrap /mnt -
+genfstab -t PARTUUID -f "/boot" /mnt >> /mnt/etc/fstab
 echo "${hostname}" > /mnt/etc/hostname
-
-cat >>/mnt/etc/pacman.conf <<EOF
-[mdaffin]
-SigLevel = Optional TrustAll
-Server = $REPO_URL
-EOF
-
 arch-chroot /mnt bootctl install
 
 cat <<EOF > /mnt/boot/loader/loader.conf
 default arch
+timeout 3
 EOF
 
 cat <<EOF > /mnt/boot/loader/entries/arch.conf
 title    Arch Linux
 linux    /vmlinuz-linux
 initrd   /initramfs-linux.img
-options  root=PARTUUID=$(blkid -s PARTUUID -o value "$part_root") rw
+options  root=zfs:bootfs rw
 EOF
 
-echo "LANG=en_GB.UTF-8" > /mnt/etc/locale.conf
+cat <<EOF > /mnt/boot/loader/entries/arch-lts.conf
+title    Arch Linux (LTS)
+linux    /vmlinuz-linux-lts
+initrd   /initramfs-linux-lts.img
+options  root=zfs:bootfs rw
+EOF
 
-arch-chroot /mnt useradd -mU -s /usr/bin/zsh -G wheel,uucp,video,audio,storage,games,input "$user"
-arch-chroot /mnt chsh -s /usr/bin/zsh
+echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
 
+# Set up skel, useradd, xdg, and other defaults
+
+rm /mnt/etc/skel/{.bashrc,.bash_history,.bash_logout}
+mkdir -p /etc/skel/.config
+mkdir -p /etc/skel/.local/bin
+mkdir -p /etc/skel/.local/scripts
+
+sed --in-place "/enabled.*/enabled=False" /mnt/etc/xdg/user-dirs.conf
+
+cat <<EOF > /mnt/etc/xdg/user-dirs.defaults
+DESKTOP=.desktop
+DOWNLOAD=downloads
+TEMPLATES=.templates
+PUBLICSHARE=.public
+DOCUMENTS=documents
+MUSIC=media/music
+PICTURES=media/pictures
+VIDEOS=media/videos
+EOF
+
+cat <<EOF > /mnt/etc/skel/.config/user-dirs.dirs
+XDG_DESKTOP_DIR="$HOME/.desktop"
+XDG_DOCUMENTS_DIR="$HOME/documents"
+XDG_DOWNLOAD_DIR="$HOME/downloads"
+XDG_MUSIC_DIR="$HOME/media/music"
+XDG_PICTURES_DIR="$HOME/media/photos"
+XDG_PUBLICSHARE_DIR="$HOME/.public"
+XDG_TEMPLATES_DIR="$HOME/.templates"
+XDG_VIDEOS_DIR="$HOME/media/videos"
+EOF
+
+cat <<EOF > /mnt/etc/skel/.zsh.local
+# Add changes to global defaults here
+
+# If not interactive then exit
+[[ $- != *i* ]] && return
+
+# Environment variables
+export EDITOR=nvim
+export AUR_PAGER=ranger
+
+# Aliases
+alias vim=nvim
+EOF
+
+cat <<EOF > /mnt/etc/profile.d/user.sh
+if [[ $UID -ge 1000 && -d $HOME/bin && -z $(echo $PATH | grep -o $HOME/bin) ]]
+then
+	    export PATH="$HOME/bin:${PATH}"
+fi
+
+if [[ $UID -ge 1000 && -d $HOME/.local/bin && -z $(echo $PATH | grep -o $HOME/.local/bin) ]]
+then
+	    export PATH="$HOME/.local/bin:${PATH}"
+fi
+
+if [[ $UID -ge 1000 && -d $HOME/.local/scripts && -z $(echo $PATH | grep -o $HOME/.local/scripts) ]]
+then
+	    export PATH="$HOME/.local/scripts:${PATH}"
+fi
+EOF
+
+sed --in-place "/DEFAULT_HOME.*/DEFAULT_HOME yes/" /mnt/etc/login.defs
+if [[ $(cat /etc/login.defs | grep -e CREATE_HOME) ]] then
+	sed --in-place "/CREATE_HOME.*/CREATE_HOME no" /mnt/etc/login.defs
+else
+	echo "\n# Whether or not user HOME is created by default\nCREATE_HOME no" >> /mnt/etc/login.defs
+fi
+
+cat <<EOF > /mnt/etc/default/useradd
+GROUP=users
+HOME=/home
+INACTIVE=-1
+EXPIRE=
+SHELL=/bin/zsh
+SKEL=/etc/skel
+CREATE_MAIL_SPOOL=no
+EOF
+
+# Create admin and all required system users
+arch-chroot /mnt useradd -rM -b /var/lib -s /bin/nologin abe
+arch-chroot /mnt useradd -MU -s /usr/bin/zsh -G wheel,video,audio,vboxusers,libvirt,kvm,realtime "$user"
+
+# Install AUR packages with dedicated user
+mkdir -p /mnt/var/cache/AUR/pkg
+mkdir -p /var/lib/abe/db
+arch-chroot /mnt repo-add /var/lib/abe/db/aur.db.tar
+
+cat <<EOF > /mnt/etc/pacman.d/aur
+[options]
+CacheDir = /var/cache/pacman/pkg
+CacheDir = /var/cache/AUR/pkg
+CleanMethod = KeepCurrent
+
+[aur]
+SigLevel = Optional TrustAll
+Server = file:///var/cache/AUR/pkg
+EOF
+
+echo "\nInclude = /etc/pacmand.d/aur" >> /etc/pacman.conf
+
+cp aurlist /mnt/root/aurlist
+pacstrap /mnt aurutils
+arch-chroot /mnt cat aurlist | sudo -u abe aur sync -nu -
+
+# Fix mkinicpio & rebuild
+sed --in-place "/MODULES=(*)/MODULES=(zfs)" /mnt/etc/mkinitcpio.conf 
+sed --in-place "/HOOKS=(*)/HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt sd-zfs sd-zfs-shutdown fsck)" /mnt/etc/mkinitcpio.conf 
+mkinitcpio -P
+
+# Make password change from archiso since zsh_history is ephemeral
 echo "$user:$password" | chpasswd --root /mnt
-echo "root:$password" | chpasswd --root /mnt
+echo "root:$rpassword" | chpasswd --root /mnt
