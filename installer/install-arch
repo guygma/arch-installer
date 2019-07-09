@@ -64,7 +64,6 @@ wipefs "${part_boot}"
 wipefs "${part_root}"
 mkfs.vfat -F32 "${part_boot}"
 
-# v !! Still needs work !! v #
 zpool create -o mountpoint=none -o feature@encryption=enabled rpool
 zfs create rpool/sys
 zfs create rpool/sys/arch
@@ -84,7 +83,8 @@ zfs create -o mountpoint=/var/lib/dav rpool/common/dav
 zfs create -o mountpoint=/var/lib/lightdm rpool/common/lightdm
 zfs create -o mountpoint=/var/lib/postfix rpool/common/postfix
 zfs create -o mountpoint=/var/lib/caddy rpool/common/caddy
-# ^ !! Still needs work !! ^ #
+zfs create -o mountpoint=/var/lib/aurbuild rpool/common/aurbuild
+zfs create -o mountpoint=/var/cache/AUR rpool/common/AUR
 
 zfs unmount -a
 zpool export -a
