@@ -46,14 +46,16 @@ exec 2> >(tee "stderr.log")
 timedatectl set-ntp true
 
 # -- Setup the disk and partitions -- #
-# Create the ESP
 sgdisk -Z ${device}
-sgdisk -n 1:0:+1G -t 1:ef00
+sgdisk -g ${device}
+
+# Create the ESP
+sgdisk -n 1:0:+1G -t 1:ef00 ${device}
 
 # v !!! THIS IS W/O ENCRYPTION SO FAR v !!! #
 
 # ZFS: one filesystem to rule them all
-sgdisk -n 2:0:0 -t 2:bf00
+sgdisk -n 2:0:0 -t 2:bf00 ${device}
 
 # ^ !!! THIS IS W/O ENCRYPTION SO FAR ^ !!! #
 
@@ -64,12 +66,12 @@ wipefs "${part_boot}"
 wipefs "${part_root}"
 mkfs.vfat -F32 "${part_boot}"
 
-zpool create -o mountpoint=none -o feature@encryption=enabled rpool
+zpool create -f -m none -R /mnt -o feature@encryption=enabled rpool ${part_root}
 zfs create rpool/sys
 zfs create rpool/sys/arch
 zfs create rpool/sys/arch/ROOT
 zfs create -o mountpoint=/ rpool/sys/arch/ROOT/default
-zpool set bootfs=rpool/sys/arch/ROOT/default
+zpool set bootfs=rpool/sys/arch/ROOT/default rpool
 zfs create rpool/common
 zfs create -o mountpoint=/home rpool/common/home
 zfs create -o mountpoint=/home/${user} rpool/common/home/${user}
@@ -120,13 +122,14 @@ options  root=zfs:bootfs rw
 EOF
 
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
+arch-chroot /mnt locale-gen
 
 # Set up skel, useradd, xdg, and other defaults
 
-rm /mnt/etc/skel/{.bashrc,.bash_history,.bash_logout}
-mkdir -p /etc/skel/.config
-mkdir -p /etc/skel/.local/bin
-mkdir -p /etc/skel/.local/scripts
+rm -f /mnt/etc/skel/{.bashrc,.bash_history,.bash_logout}
+mkdir -p /mnt/etc/skel/.config
+mkdir -p /mnt/etc/skel/.local/bin
+mkdir -p /mnt/etc/skel/.local/scripts
 
 sed --in-place "/enabled.*/enabled=False" /mnt/etc/xdg/user-dirs.conf
 
@@ -183,9 +186,9 @@ then
 fi
 EOF
 
-sed --in-place "/DEFAULT_HOME.*/DEFAULT_HOME yes/" /mnt/etc/login.defs
+sed --in-place "s/DEFAULT_HOME.*/DEFAULT_HOME yes/" /mnt/etc/login.defs
 if [[ $(cat /etc/login.defs | grep -e CREATE_HOME) ]] then
-	sed --in-place "/CREATE_HOME.*/CREATE_HOME no" /mnt/etc/login.defs
+	sed --in-place "s/CREATE_HOME.*/CREATE_HOME no" /mnt/etc/login.defs
 else
 	echo "\n# Whether or not user HOME is created by default\nCREATE_HOME no" >> /mnt/etc/login.defs
 fi
@@ -217,7 +220,7 @@ CleanMethod = KeepCurrent
 
 [aur]
 SigLevel = Optional TrustAll
-Server = file:///var/cache/AUR/pkg
+Server = file:///var/lib/abe/db
 EOF
 
 echo "\nInclude = /etc/pacmand.d/aur" >> /etc/pacman.conf
@@ -227,10 +230,15 @@ pacstrap /mnt aurutils
 arch-chroot /mnt cat aurlist | sudo -u abe aur sync -nu -
 
 # Fix mkinicpio & rebuild
-sed --in-place "/MODULES=(*)/MODULES=(zfs)" /mnt/etc/mkinitcpio.conf 
-sed --in-place "/HOOKS=(*)/HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt sd-zfs sd-zfs-shutdown fsck)" /mnt/etc/mkinitcpio.conf 
+sed --in-place "s/MODULES=(*)/MODULES=(zfs)" /mnt/etc/mkinitcpio.conf 
+sed --in-place "s/HOOKS=(*)/HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt sd-zfs sd-zfs-shutdown fsck)" /mnt/etc/mkinitcpio.conf 
 mkinitcpio -P
 
 # Make password change from archiso since zsh_history is ephemeral
 echo "$user:$password" | chpasswd --root /mnt
 echo "root:$rpassword" | chpasswd --root /mnt
+
+# Clean up
+umount ${device}*
+zfs unmount -a
+zpool export -a
