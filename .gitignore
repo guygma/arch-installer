@@ -5,3 +5,5 @@
 repo/
 *.log
 root/
+archlive/
+archlive/*
