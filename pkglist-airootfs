@@ -64,5 +64,10 @@ wireless_tools
 wpa_supplicant
 wvdial
 xl2tpd
-zfs-linux
 zfs-utils
+base-devel
+git
+jq
+pacutils
+parallel
+wget

@@ -8,3 +8,8 @@ repo/
 root/
 archlive/
 archlive/*
+work/
+work/*
+*.iso
+out/
+out/*
