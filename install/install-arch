@@ -97,7 +97,7 @@ mount "${part_boot}" /mnt/boot
 # -- Install and configure the basic system -- #
 
 # Bare essentials - make the chroot boot
-cat pkglist | pacstrap /mnt -
+cat pkglist | pacstrap -c /mnt -
 genfstab -t PARTUUID -f "/boot" /mnt >> /mnt/etc/fstab
 echo "${hostname}" > /mnt/etc/hostname
 arch-chroot /mnt bootctl install

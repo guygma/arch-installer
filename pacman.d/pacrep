@@ -1,0 +1,7 @@
+[options]
+CacheDir = /var/cache/PACREP/pkg
+CleanMethod = KeepCurrent
+
+[pacrep]
+SigLevel = Optional TrustAll
+Server = file:///var/cache/PACREP/pkg

@@ -64,7 +64,5 @@ wireless_tools
 wpa_supplicant
 wvdial
 xl2tpd
-base-devel
-aurutils
 zfs-linux
 zfs-utils

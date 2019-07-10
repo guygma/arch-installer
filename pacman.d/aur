@@ -1,0 +1,7 @@
+[options]
+CacheDir = /var/cache/AUR/pkg
+CleanMethod = KeepCurrent
+
+[aur]
+SigLevel = Optional TrustAll
+Server = file:///var/cache/AUR/pkg
