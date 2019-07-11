@@ -209,8 +209,11 @@ arch-chroot /mnt useradd -MU -s /usr/bin/zsh -G wheel,video,audio,vboxusers,libv
 
 # Install AUR packages with dedicated user
 mkdir -p /mnt/var/cache/AUR/pkg
-mkdir -p /var/lib/abe/db
-arch-chroot /mnt repo-add /var/lib/abe/db/aur.db.tar
+
+arch-chroot /mnt sudo -u abe gpg --recv-keys DBE7D3DD8C81D58D0A13D0E76BC26A17B9B7018A
+arch-chroot /mnt sudo -u abe ( cd /var/lib/abe ; curl -L https://aur.archlinux.org/cgit/aur.git/snapshot/aurutils.tar.gz | tar xz )
+arch-chroot /mnt sudo -u abe ( cd /var/lib/abe/aurutils ; BUILDDIR=. PKGDEST=/var/cache/AUR/pkg makepkg -rc ) && rm -rf aurutils
+arch-chroot /mnt repo-add /var/cache/AUR/pkg/aur.db.tar
 
 cat <<EOF > /mnt/etc/pacman.d/aur
 [options]
@@ -220,13 +223,12 @@ CleanMethod = KeepCurrent
 
 [aur]
 SigLevel = Optional TrustAll
-Server = file:///var/lib/abe/db
+Server = file:///var/cache/AUR/pkg
 EOF
 
 echo "\nInclude = /etc/pacmand.d/aur" >> /etc/pacman.conf
 
 cp aurlist /mnt/root/aurlist
-pacstrap /mnt aurutils
 arch-chroot /mnt cat aurlist | sudo -u abe aur sync -nu -
 
 # Fix mkinicpio & rebuild
