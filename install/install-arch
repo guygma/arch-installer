@@ -102,24 +102,24 @@ genfstab -t PARTUUID -f "/boot" /mnt >> /mnt/etc/fstab
 echo "${hostname}" > /mnt/etc/hostname
 arch-chroot /mnt bootctl install
 
-cat <<EOF > /mnt/boot/loader/loader.conf
+cat <<HERE > /mnt/boot/loader/loader.conf
 default arch
 timeout 3
-EOF
+HERE
 
-cat <<EOF > /mnt/boot/loader/entries/arch.conf
+cat <<HERE > /mnt/boot/loader/entries/arch.conf
 title    Arch Linux
 linux    /vmlinuz-linux
 initrd   /initramfs-linux.img
 options  root=zfs:bootfs rw
-EOF
+HERE
 
-cat <<EOF > /mnt/boot/loader/entries/arch-lts.conf
+cat <<HERE > /mnt/boot/loader/entries/arch-lts.conf
 title    Arch Linux (LTS)
 linux    /vmlinuz-linux-lts
 initrd   /initramfs-linux-lts.img
 options  root=zfs:bootfs rw
-EOF
+HERE
 
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
 arch-chroot /mnt locale-gen
@@ -133,7 +133,7 @@ mkdir -p /mnt/etc/skel/.local/scripts
 
 sed --in-place "/enabled.*/enabled=False" /mnt/etc/xdg/user-dirs.conf
 
-cat <<EOF > /mnt/etc/xdg/user-dirs.defaults
+cat <<HERE > /mnt/etc/xdg/user-dirs.defaults
 DESKTOP=.desktop
 DOWNLOAD=downloads
 TEMPLATES=.templates
@@ -142,9 +142,9 @@ DOCUMENTS=documents
 MUSIC=media/music
 PICTURES=media/pictures
 VIDEOS=media/videos
-EOF
+HERE
 
-cat <<EOF > /mnt/etc/skel/.config/user-dirs.dirs
+cat <<HERE > /mnt/etc/skel/.config/user-dirs.dirs
 XDG_DESKTOP_DIR="$HOME/.desktop"
 XDG_DOCUMENTS_DIR="$HOME/documents"
 XDG_DOWNLOAD_DIR="$HOME/downloads"
@@ -153,9 +153,9 @@ XDG_PICTURES_DIR="$HOME/media/photos"
 XDG_PUBLICSHARE_DIR="$HOME/.public"
 XDG_TEMPLATES_DIR="$HOME/.templates"
 XDG_VIDEOS_DIR="$HOME/media/videos"
-EOF
+HERE
 
-cat <<EOF > /mnt/etc/skel/.zsh.local
+cat <<HERE > /mnt/etc/skel/.zsh.local
 # Add changes to global defaults here
 
 # If not interactive then exit
@@ -167,9 +167,9 @@ export AUR_PAGER=ranger
 
 # Aliases
 alias vim=nvim
-EOF
+HERE
 
-cat <<EOF > /mnt/etc/profile.d/user.sh
+cat <<HERE > /mnt/etc/profile.d/user.sh
 if [[ $UID -ge 1000 && -d $HOME/bin && -z $(echo $PATH | grep -o $HOME/bin) ]]
 then
 	    export PATH="$HOME/bin:${PATH}"
@@ -184,16 +184,18 @@ if [[ $UID -ge 1000 && -d $HOME/.local/scripts && -z $(echo $PATH | grep -o $HOM
 then
 	    export PATH="$HOME/.local/scripts:${PATH}"
 fi
-EOF
+HERE
 
 sed --in-place "s/DEFAULT_HOME.*/DEFAULT_HOME yes/" /mnt/etc/login.defs
-if [[ $(cat /etc/login.defs | grep -e CREATE_HOME) ]] then
+if [[ $(cat /etc/login.defs | grep -e CREATE_HOME) ]] 
+then
 	sed --in-place "s/CREATE_HOME.*/CREATE_HOME no" /mnt/etc/login.defs
 else
-	echo "\n# Whether or not user HOME is created by default\nCREATE_HOME no" >> /mnt/etc/login.defs
+	echo "# Whether or not user HOME is created by default" >> /mnt/etc/login.defs
+	echo "CREATE_HOME no" >> /mnt/etc/login.defs
 fi
 
-cat <<EOF > /mnt/etc/default/useradd
+cat <<HERE > /mnt/etc/default/useradd
 GROUP=users
 HOME=/home
 INACTIVE=-1
@@ -201,21 +203,24 @@ EXPIRE=
 SHELL=/bin/zsh
 SKEL=/etc/skel
 CREATE_MAIL_SPOOL=no
-EOF
+HERE
 
 # Create admin and all required system users
-arch-chroot /mnt useradd -rM -b /var/lib -s /bin/nologin abe
-arch-chroot /mnt useradd -MU -s /usr/bin/zsh -G wheel,video,audio,vboxusers,libvirt,kvm,realtime "$user"
+arch-chroot /mnt useradd -rM -d /var/lib/abe -s /bin/nologin abe
+arch-chroot /mnt useradd -MU -s /usr/bin/zsh -G wheel,video,audio "$user"
 
 # Install AUR packages with dedicated user
 mkdir -p /mnt/var/cache/AUR/pkg
 
-arch-chroot /mnt sudo -u abe gpg --recv-keys DBE7D3DD8C81D58D0A13D0E76BC26A17B9B7018A
-arch-chroot /mnt sudo -u abe ( cd /var/lib/abe ; curl -L https://aur.archlinux.org/cgit/aur.git/snapshot/aurutils.tar.gz | tar xz )
-arch-chroot /mnt sudo -u abe ( cd /var/lib/abe/aurutils ; BUILDDIR=. PKGDEST=/var/cache/AUR/pkg makepkg -rc ) && rm -rf aurutils
-arch-chroot /mnt repo-add /var/cache/AUR/pkg/aur.db.tar
+cp makepkg-aurutils.sh /mnt/var/lib/abe
+arch-chroot /mnt chown -R abe:abe /var/lib/abe
+arch-chroot /mnt chown -R abe:abe /var/cache/AUR
+arch-chroot /mnt sudo -u abe /var/lib/abe/makepkg-aurutils.sh
+# TODO
+# - fix locale
+# - ensure aurutils dependencies by installing pkglist-post first
 
-cat <<EOF > /mnt/etc/pacman.d/aur
+cat <<HERE > /mnt/etc/pacman.d/aur
 [options]
 CacheDir = /var/cache/pacman/pkg
 CacheDir = /var/cache/AUR/pkg
@@ -224,7 +229,7 @@ CleanMethod = KeepCurrent
 [aur]
 SigLevel = Optional TrustAll
 Server = file:///var/cache/AUR/pkg
-EOF
+HERE
 
 echo "\nInclude = /etc/pacmand.d/aur" >> /etc/pacman.conf
 

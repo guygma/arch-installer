@@ -65,9 +65,5 @@ wpa_supplicant
 wvdial
 xl2tpd
 zfs-utils
-base-devel
-git
-jq
-pacutils
-parallel
-wget
+zfs-dkms
+linux-headers
