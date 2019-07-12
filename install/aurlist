@@ -1,2 +1,3 @@
 aurutils
-mkinicpio-sd-zfs
+mkinitcpio-sd-zfs
+luakit

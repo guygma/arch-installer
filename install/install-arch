@@ -5,12 +5,6 @@ trap 's=$?; echo "$0: Error on line "$LINENO": $BASH_COMMAND"; exit $s' ERR
 
 MIRRORLIST_URL="https://www.archlinux.org/mirrorlist/?country=GB&protocol=https&use_mirror_status=on"
 
-pacman -Sy --noconfirm pacman-contrib
-
-echo "Updating mirror list"
-curl -s "$MIRRORLIST_URL" | \
-    sed -e 's/^#Server/Server/' -e '/^#/d' | \
-    rankmirrors -n 5 - > /etc/pacman.d/mirrorlist
 
 ### Get infomation from user ###
 hostname=$(dialog --stdout --inputbox "Enter hostname for new install" 0 0) || exit 1
@@ -42,6 +36,8 @@ clear
 ### Set up logging ###
 exec 1> >(tee "stdout.log")
 exec 2> >(tee "stderr.log")
+
+mount -o remount,size=8G /run/archiso/cowspace
 
 timedatectl set-ntp true
 
@@ -87,6 +83,8 @@ zfs create -o mountpoint=/var/lib/postfix rpool/common/postfix
 zfs create -o mountpoint=/var/lib/caddy rpool/common/caddy
 zfs create -o mountpoint=/var/lib/aurbuild rpool/common/aurbuild
 zfs create -o mountpoint=/var/cache/AUR rpool/common/AUR
+zfs create -o mountpoint=/var/cache/pacman rpool/common/pacman
+
 
 zfs unmount -a
 zpool export -a
@@ -95,6 +93,14 @@ mkdir -p /mnt/boot
 mount "${part_boot}" /mnt/boot
 
 # -- Install and configure the basic system -- #
+
+cp pacman-host-post.conf /etc/pacman.conf
+pacman -Sy --noconfirm pacman-contrib
+
+echo "Updating mirror list"
+curl -s "$MIRRORLIST_URL" | \
+    sed -e 's/^#Server/Server/' -e '/^#/d' | \
+    rankmirrors -n 5 - > /etc/pacman.d/mirrorlist
 
 # Bare essentials - make the chroot boot
 cat pkglist | pacstrap -c /mnt -
@@ -122,6 +128,7 @@ options  root=zfs:bootfs rw
 HERE
 
 echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
+echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
 arch-chroot /mnt locale-gen
 
 # Set up skel, useradd, xdg, and other defaults
@@ -206,19 +213,20 @@ CREATE_MAIL_SPOOL=no
 HERE
 
 # Create admin and all required system users
-arch-chroot /mnt useradd -rM -d /var/lib/abe -s /bin/nologin abe
+arch-chroot /mnt useradd -rM -d /var/lib/abe -s /bin/sh abe
 arch-chroot /mnt useradd -MU -s /usr/bin/zsh -G wheel,video,audio "$user"
 
-# Install AUR packages with dedicated user
+# Install AUR packages with dedicated user and all remaining core packages
 mkdir -p /mnt/var/cache/AUR/pkg
-
 cp makepkg-aurutils.sh /mnt/var/lib/abe
 arch-chroot /mnt chown -R abe:abe /var/lib/abe
 arch-chroot /mnt chown -R abe:abe /var/cache/AUR
+./pacstrap_byline.sh /mnt pkglist-post
+#cat pkglist-post | arch-chroot /mnt pacman --noconfirm -Sy -
+#pacman install from file line by line
+#while IFS= read -r line; do pacman --noconfirm -S; done < pkglist-post
 arch-chroot /mnt sudo -u abe /var/lib/abe/makepkg-aurutils.sh
-# TODO
-# - fix locale
-# - ensure aurutils dependencies by installing pkglist-post first
+
 
 cat <<HERE > /mnt/etc/pacman.d/aur
 [options]
@@ -231,10 +239,23 @@ SigLevel = Optional TrustAll
 Server = file:///var/cache/AUR/pkg
 HERE
 
-echo "\nInclude = /etc/pacmand.d/aur" >> /etc/pacman.conf
+cat <<'HERE'  >> /mnt/etc/pacman.conf
 
-cp aurlist /mnt/root/aurlist
-arch-chroot /mnt cat aurlist | sudo -u abe aur sync -nu -
+[archzfs]
+SigLevel = Optional TrustAll
+Server = http://archzfs.com/$repo/$arch
+
+Include = /etc/pacman.d/aur
+HERE
+
+echo 'abe ALL=(ALL) NOPASSWD: ALL' > /mnt/etc/sudoers.d/abe
+
+arch-chroot /mnt pacman --noconfirm -Sy aurutils
+# TODO
+# - fix locale
+# - ensure aurutils dependencies by installing pkglist-post first
+cat aurlist | arch-chroot /mnt xargs sudo -u abe aur sync --noview --noconfirm --upgrades
+./pacstrap_byline.sh /mnt aurlist
 
 # Fix mkinicpio & rebuild
 sed --in-place "s/MODULES=(*)/MODULES=(zfs)" /mnt/etc/mkinitcpio.conf 
