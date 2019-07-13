@@ -37,7 +37,10 @@ clear
 exec 1> >(tee "stdout.log")
 exec 2> >(tee "stderr.log")
 
-mount -o remount,size=8G /run/archiso/cowspace
+# Install yubikey full disk encryption suite for initramfs
+git clone https://github.com/agherzan/yubikey-full-disk-encryption.git
+( cd yubikey-full-disk-encryption ; 
+  make install )
 
 timedatectl set-ntp true
 
@@ -45,24 +48,28 @@ timedatectl set-ntp true
 sgdisk -Z ${device}
 sgdisk -g ${device}
 
-# Create the ESP
+# Create the ESP and encryption root
 sgdisk -n 1:0:+1G -t 1:ef00 ${device}
+sgdisk -n 2:0:0 -t 2:8300 ${device}
 
-# v !!! THIS IS W/O ENCRYPTION SO FAR v !!! #
+# Get UUID for the root encryption device
+enc_uuid = $(l /dev/disk/by-uuid | grep ${part_eroot} | awk '{print $9}')
+ykfde-format --cipher aes-xts-plain64 --key-size 512 --hash sha512 ${part_eroot}
+ykfde-open -d ${part_eroot} -n eroot
 
 # ZFS: one filesystem to rule them all
 sgdisk -n 2:0:0 -t 2:bf00 ${device}
 
-# ^ !!! THIS IS W/O ENCRYPTION SO FAR ^ !!! #
 
 # Prepare filesystems
 part_boot="$(ls ${device}* | grep -E "^${device}p?1$")"
-part_root="$(ls ${device}* | grep -E "^${device}p?2$")"
+part_eroot="$(ls ${device}* | grep -E "^${device}p?2$")"
 wipefs "${part_boot}"
-wipefs "${part_root}"
+wipefs "${part_eroot}"
 mkfs.vfat -F32 "${part_boot}"
+part_zroot="/dev/mapper/eroot"
 
-zpool create -f -m none -R /mnt -o feature@encryption=enabled rpool ${part_root}
+zpool create -f -m none -R /mnt -o feature@encryption=enabled rpool ${part_zroot}
 zfs create rpool/sys
 zfs create rpool/sys/arch
 zfs create rpool/sys/arch/ROOT
@@ -85,12 +92,13 @@ zfs create -o mountpoint=/var/lib/aurbuild rpool/common/aurbuild
 zfs create -o mountpoint=/var/cache/AUR rpool/common/AUR
 zfs create -o mountpoint=/var/cache/pacman rpool/common/pacman
 
-
 zfs unmount -a
 zpool export -a
 zpool import -R /mnt rpool
 mkdir -p /mnt/boot
 mount "${part_boot}" /mnt/boot
+
+
 
 # -- Install and configure the basic system -- #
 
@@ -257,6 +265,16 @@ arch-chroot /mnt pacman --noconfirm -Sy aurutils
 cat aurlist | arch-chroot /mnt xargs sudo -u abe aur sync --noview --noconfirm --upgrades
 ./pacstrap_byline.sh /mnt aurlist
 
+# Finish encryption setup
+
+cat <<HERE > /mnt/etc/ykfde.conf
+YKFDE_CHALLENGE=""
+YKFDE_CHALLENGE_PASSWORD_NEEDED="1"
+YKFDE_CHALLENGE_SLOT="2"
+YKFDE_DISK_UUID="${enc_uuid}"
+YKFDE_LUKS_NAME="eroot"
+HERE
+
 # Fix mkinicpio & rebuild
 sed --in-place "s/MODULES=(*)/MODULES=(zfs)" /mnt/etc/mkinitcpio.conf 
 sed --in-place "s/HOOKS=(*)/HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt sd-zfs sd-zfs-shutdown fsck)" /mnt/etc/mkinitcpio.conf 
@@ -270,3 +288,4 @@ echo "root:$rpassword" | chpasswd --root /mnt
 umount ${device}*
 zfs unmount -a
 zpool export -a
+cryptsetup close eroot

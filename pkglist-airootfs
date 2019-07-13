@@ -67,3 +67,9 @@ xl2tpd
 zfs-utils
 zfs-dkms
 linux-headers
+make
+git
+yubikey-personalization
+cryptsetup
+udisks2
+expect
