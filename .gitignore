@@ -13,3 +13,7 @@ work/*
 *.iso*
 out/
 out/*
+*BACKUP*
+*BASE*
+*LOCAL*
+*REMOTE*

@@ -111,10 +111,14 @@ curl -s "$MIRRORLIST_URL" | \
     rankmirrors -n 5 - > /etc/pacman.d/mirrorlist
 
 # Bare essentials - make the chroot boot
-cat pkglist | pacstrap -c /mnt -
+cat pkglist | pacstrap /mnt -
 genfstab -t PARTUUID -f "/boot" /mnt >> /mnt/etc/fstab
 echo "${hostname}" > /mnt/etc/hostname
-arch-chroot /mnt bootctl install
+echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
+echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
+arch-chroot /mnt locale-gen
+
+arch-chroot /mnt bootctl install --no-variables
 
 cat <<HERE > /mnt/boot/loader/loader.conf
 default arch
@@ -125,19 +129,15 @@ cat <<HERE > /mnt/boot/loader/entries/arch.conf
 title    Arch Linux
 linux    /vmlinuz-linux
 initrd   /initramfs-linux.img
-options  root=zfs:bootfs rw
+options  root=zfs:AUTO rw
 HERE
 
 cat <<HERE > /mnt/boot/loader/entries/arch-lts.conf
 title    Arch Linux (LTS)
 linux    /vmlinuz-linux-lts
 initrd   /initramfs-linux-lts.img
-options  root=zfs:bootfs rw
+options  root=zfs:AUTO rw
 HERE
-
-echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
-echo "en_US.UTF-8 UTF-8" > /mnt/etc/locale.gen
-arch-chroot /mnt locale-gen
 
 # Set up skel, useradd, xdg, and other defaults
 
@@ -232,7 +232,6 @@ arch-chroot /mnt chown -R abe:abe /var/cache/AUR
 ./pacstrap_byline.sh /mnt pkglist-post
 #cat pkglist-post | arch-chroot /mnt pacman --noconfirm -Sy -
 #pacman install from file line by line
-#while IFS= read -r line; do pacman --noconfirm -S; done < pkglist-post
 arch-chroot /mnt sudo -u abe /var/lib/abe/makepkg-aurutils.sh
 
 
@@ -259,11 +258,11 @@ HERE
 echo 'abe ALL=(ALL) NOPASSWD: ALL' > /mnt/etc/sudoers.d/abe
 
 arch-chroot /mnt pacman --noconfirm -Sy aurutils
-# TODO
-# - fix locale
-# - ensure aurutils dependencies by installing pkglist-post first
-cat aurlist | arch-chroot /mnt xargs sudo -u abe aur sync --noview --noconfirm --upgrades
-./pacstrap_byline.sh /mnt aurlist
+while IFS= read -r line; do arch-chroot /mnt sudo -u abe aur sync --noview -nu $line; done < aurlist
+#cat aurlist | arch-chroot /mnt xargs sudo -u abe aur sync --noview --noconfirm --upgrades
+while IFS= read -r line; do arch-chroot /mnt pacman --noconfirm -S $line; done < aurlist
+#cat aurlist | arch-chroot /mnt xargs pacman --noconfirm -Sy
+arch-chroot /mnt pacman --noconfirm -Syu
 
 # Finish encryption setup
 
@@ -276,16 +275,28 @@ YKFDE_LUKS_NAME="eroot"
 HERE
 
 # Fix mkinicpio & rebuild
-sed --in-place "s/MODULES=(*)/MODULES=(zfs)" /mnt/etc/mkinitcpio.conf 
-sed --in-place "s/HOOKS=(*)/HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt sd-zfs sd-zfs-shutdown fsck)" /mnt/etc/mkinitcpio.conf 
-mkinitcpio -P
+cat <<HERE > /mnt/etc/mkinitcpio.conf
+
+MODULES=(zfs i915)
+BINARY=()
+FILES=()
+HOOKS=(base systemd autodetect keyboard sd-vconsole modconf block sd-encrypt sd-zfs sd-zfs-shutdown fsck)
+HERE
+
+touch /mnt/etc/vconsole.conf
+arch-chroot /mnt mkinitcpio -P
+
+# Install .config and /etc files
+# ....
+
 
 # Make password change from archiso since zsh_history is ephemeral
 echo "$user:$password" | chpasswd --root /mnt
 echo "root:$rpassword" | chpasswd --root /mnt
 
+
 # Clean up
-umount ${device}*
+umount ${part_boot}
 zfs unmount -a
 zpool export -a
 cryptsetup close eroot
